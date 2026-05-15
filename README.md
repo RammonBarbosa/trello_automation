@@ -1,4 +1,4 @@
-#  Automação de Movimentação do Trello (CTTU)
+#  Automação de Movimentação do Trello 
 
 Um script em Python desenvolvido para automatizar o fluxo de trabalho Kanban no Trello. O processo de atendimento de solicitações abrange desde a fase de projeto até a implantação, envolvendo múltiplos quadros e listas para integrar diferentes setores da equipe. A automação atua monitorando constantemente os cartões: ela verifica a conclusão de subprojetos anexados e move automaticamente o cartão principal para a fila de execução, eliminando tarefas manuais e otimizando o tempo de resposta.
 
