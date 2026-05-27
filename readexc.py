@@ -38,6 +38,8 @@ def gerar_relatorio_inteligente():
 
     for cartao_pai in solicitacoes_pai:
         nome_pai = cartao_pai['name']
+        
+        # FILTRO BLINDADO: Garante que o link possui a estrutura de cartão '/c/'
         anexos_pai = [a for a in cartao_pai.get('attachments', []) if 'trello.com/c/' in a['url']]
         
         if not anexos_pai:
@@ -45,7 +47,14 @@ def gerar_relatorio_inteligente():
             print(f"⚠️  [SEM PROJETO ANEXADO]  {nome_pai}")
             continue
 
-        short_id_filho = anexos_pai[0]['url'].split('/')[-2]
+        # Pega a parte da URL correspondente ao shortLink do cartão de forma segura
+        url_partes = anexos_pai[0]['url'].split('/c/')
+        if len(url_partes) < 2:
+            erros_de_leitura += 1
+            print(f"🚫 [LINK INVÁLIDO NO PAI]  {nome_pai}")
+            continue
+            
+        short_id_filho = url_partes[1].split('/')[0]
         
         # BUSCA O FILHO (Projeto)
         res_filho = requests.get(
@@ -70,7 +79,13 @@ def gerar_relatorio_inteligente():
                 print(f"⚠️  [SEM IMPLANTAÇÃO]      {nome_pai}")
                 continue
                 
-            short_id_neto = anexos_filho[0]['url'].split('/')[-2]
+            url_partes_filho = anexos_filho[0]['url'].split('/c/')
+            if len(url_partes_filho) < 2:
+                erros_de_leitura += 1
+                print(f"🚫 [LINK INVÁLIDO NO FILHO] {nome_pai}")
+                continue
+                
+            short_id_neto = url_partes_filho[1].split('/')[0]
             
             # BUSCA O NETO (Implantação)
             res_neto = requests.get(
@@ -82,11 +97,11 @@ def gerar_relatorio_inteligente():
             if res_neto.status_code == 200:
                 dados_neto = res_neto.json()
                 
-                # Coleta as etiquetas do cartão Neto
+                # Coleta as etiquetas convertendo para minúsculo
                 etiquetas_neto = [l['name'].lower() for l in dados_neto.get('labels', [])]
                 
-                # 🔍 REGRA 2: Verifica se está concluído pela data OU pela etiqueta "vistoriado"
-                tem_etiqueta_vistoriado = "VISTORIADO" in etiquetas_neto
+                # 🔍 REGRA 2: Verifica em minúsculo se a etiqueta existe
+                tem_etiqueta_vistoriado = "vistoriado" in etiquetas_neto
                 data_concluida = dados_neto.get('dueComplete') == True
                 
                 if data_concluida or tem_etiqueta_vistoriado:
