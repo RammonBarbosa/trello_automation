@@ -1,79 +1,198 @@
-# Essa automação move todos os cartões na lista de projetos(Quadro Solicitação) que tem um cartão anexado
-# Este cartão anexado tem que está na lista de finalizados no outro quadro(Quadro Projetos)
+import os
+import re
+import time
 
 import requests
-import time
-import os
 from dotenv import load_dotenv
+
 
 load_dotenv()
 
-# --- CONFIGURAÇÕES ---
-API_KEY = os.getenv('API_KEY')
-TOKEN = os.getenv('TOKEN')
-LISTA_PROJETO_SOLICITACOES = '6669a662923d4751850ae26a' #id da lista de projetos do quadro de solicitações
-LISTA_FINALIZADO_PROJETOS = '66a3cd4cf460377406141493' #id da lista de finalizados do quadro de projetos
-LISTA_EXECUCAO = '6669a6666762039572b85c2d' #id da lista de execução do quadro de solicitações
+# --- CONFIGURACOES ---
+API_KEY = os.getenv("API_KEY")
+TOKEN = os.getenv("TOKEN")
 
-def rodar_automacao_flexivel():
-    print("🔍 Iniciando verificação (Basta um anexo pronto)...")
-    url_cards = f"https://api.trello.com/1/lists/{LISTA_PROJETO_SOLICITACOES}/cards"
-    params = {'key': API_KEY, 'token': TOKEN, 'attachments': 'true'}
-    
-    response = requests.get(url_cards, params=params)
-    
-    if response.status_code != 200:
-        print(f"❌ O Trello barrou o acesso! Motivo: {response.text}")
-        print(f"Chave lida pelo script: {API_KEY}")
-        print(f"Token lido pelo script: {TOKEN}")
-        return
+LISTA_PROJETO_SOLICITACOES = "6669a662923d4751850ae26a"
+LISTA_FINALIZADO_PROJETOS = "66a3cd4cf460377406141493"
+LISTA_EXECUCAO = "6669a6666762039572b85c2d"
 
-    solicitacoes = response.json()
-    
-    # Variável para contar quantos cartões foram movidos com sucesso <---
-    cartoes_movidos = 0
+TRELLO_API = "https://api.trello.com/1"
+TIMEOUT = 20
+MAX_TENTATIVAS = 3
 
-    for cartao in solicitacoes:
-        anexos_trello = [a for a in cartao.get('attachments', []) if 'trello.com/c/' in a['url']]
-        
-        if not anexos_trello:
+
+def validar_configuracao():
+    if not API_KEY or not TOKEN:
+        raise RuntimeError(
+            "API_KEY ou TOKEN nao foram carregados. Confira o arquivo .env."
+        )
+
+
+def extrair_shortlink_trello(url):
+    if not url:
+        return None
+
+    match = re.search(r"trello\.com/c/([^/?#]+)", url, flags=re.IGNORECASE)
+    if not match:
+        return None
+
+    return match.group(1)
+
+
+def requisicao_trello(metodo, caminho, **params):
+    url = f"{TRELLO_API}{caminho}"
+    params = {"key": API_KEY, "token": TOKEN, **params}
+
+    for tentativa in range(1, MAX_TENTATIVAS + 1):
+        try:
+            response = requests.request(
+                metodo,
+                url,
+                params=params,
+                timeout=TIMEOUT,
+            )
+        except requests.RequestException as erro:
+            if tentativa == MAX_TENTATIVAS:
+                raise RuntimeError(f"Falha de conexao com o Trello: {erro}") from erro
+
+            print(f"Falha de conexao. Tentando novamente ({tentativa}/{MAX_TENTATIVAS})...")
+            time.sleep(2 * tentativa)
             continue
 
-        pelo_menos_um_finalizado = False
-        nome_anexo_pronto = ""
+        if response.status_code != 429:
+            return response
+
+        espera = int(response.headers.get("Retry-After", "10"))
+        print(f"Rate limit do Trello. Aguardando {espera}s antes de tentar novamente...")
+        time.sleep(espera)
+
+    return response
+
+
+def buscar_cartoes_solicitacoes():
+    response = requisicao_trello(
+        "GET",
+        f"/lists/{LISTA_PROJETO_SOLICITACOES}/cards",
+        attachments="true",
+        fields="id,name,idList",
+    )
+
+    if response.status_code != 200:
+        raise RuntimeError(
+            "O Trello barrou o acesso aos cartoes da lista de solicitacoes. "
+            f"Status: {response.status_code}. Resposta: {response.text}"
+        )
+
+    return response.json()
+
+
+def buscar_cartao_vinculado(shortlink):
+    response = requisicao_trello(
+        "GET",
+        f"/cards/{shortlink}",
+        fields="id,name,idList,idBoard,closed,shortLink,url",
+    )
+
+    if response.status_code != 200:
+        return None, response
+
+    return response.json(), response
+
+
+def mover_cartao_para_execucao(cartao):
+    return requisicao_trello(
+        "PUT",
+        f"/cards/{cartao['id']}",
+        idList=LISTA_EXECUCAO,
+    )
+
+
+def rodar_automacao_flexivel():
+    validar_configuracao()
+
+    print("Iniciando verificacao: basta um anexo Trello estar finalizado.")
+
+    solicitacoes = buscar_cartoes_solicitacoes()
+
+    cartoes_movidos = 0
+    cartoes_sem_anexo_trello = 0
+    cartoes_sem_anexo_finalizado = 0
+    falhas_consulta_anexo = 0
+    falhas_movimento = 0
+
+    for cartao in solicitacoes:
+        anexos_trello = []
+
+        for anexo in cartao.get("attachments", []):
+            url = anexo.get("url", "")
+            shortlink = extrair_shortlink_trello(url)
+
+            if shortlink:
+                anexos_trello.append({"shortlink": shortlink, "url": url})
+
+        if not anexos_trello:
+            cartoes_sem_anexo_trello += 1
+            print(f"Sem anexo Trello: '{cartao['name']}'")
+            continue
+
+        anexo_finalizado = None
 
         for anexo in anexos_trello:
-            short_id = anexo['url'].split('/')[-2]
-            res_vinculado = requests.get(
-                f"https://api.trello.com/1/cards/{short_id}",
-                params={'key': API_KEY, 'token': TOKEN}
-            )
-            
-            if res_vinculado.status_code == 200:
-                dados = res_vinculado.json()
-                if dados['idList'] == LISTA_FINALIZADO_PROJETOS:
-                    pelo_menos_um_finalizado = True
-                    nome_anexo_pronto = dados['name']
-                    break # Encontrou um pronto? Já pode parar de olhar os outros anexos deste cartão
+            dados_vinculado, response = buscar_cartao_vinculado(anexo["shortlink"])
 
-        if pelo_menos_um_finalizado:
-            print(f"🚀 SUCESSO: O anexo '{nome_anexo_pronto}' foi finalizado. Movendo '{cartao['name']}'...")
-            res_move = requests.put(
-                f"https://api.trello.com/1/cards/{cartao['id']}",
-                params={'key': API_KEY, 'token': TOKEN, 'idList': LISTA_EXECUCAO}
+            if dados_vinculado is None:
+                falhas_consulta_anexo += 1
+                print(
+                    "Falha ao consultar anexo "
+                    f"{anexo['shortlink']} do cartao '{cartao['name']}'. "
+                    f"Status: {response.status_code}. Resposta: {response.text}"
+                )
+                continue
+
+            if dados_vinculado.get("idList") == LISTA_FINALIZADO_PROJETOS:
+                anexo_finalizado = dados_vinculado
+                break
+
+            print(
+                f"Anexo ainda nao finalizado: '{dados_vinculado.get('name')}' "
+                f"esta na lista {dados_vinculado.get('idList')}."
             )
-            
-            # ---> NOVO: Se o Trello confirmou a movimentação (status 200), soma 1 no contador <---
-            if res_move.status_code == 200:
-                cartoes_movidos += 1
-                
+
+        if not anexo_finalizado:
+            cartoes_sem_anexo_finalizado += 1
+            print(
+                f"'{cartao['name']}': nenhum dos {len(anexos_trello)} "
+                "anexos Trello esta na lista de finalizados."
+            )
+            continue
+
+        print(
+            f"Anexo finalizado encontrado: '{anexo_finalizado['name']}'. "
+            f"Movendo '{cartao['name']}' para Execucao..."
+        )
+
+        response_move = mover_cartao_para_execucao(cartao)
+
+        if response_move.status_code == 200:
+            cartoes_movidos += 1
+            print(f"Movido com sucesso: '{cartao['name']}'")
         else:
-            print(f"⏳ '{cartao['name']}': Nenhum dos {len(anexos_trello)} anexos está pronto ainda.")
+            falhas_movimento += 1
+            print(
+                f"Falha ao mover '{cartao['name']}'. "
+                f"Status: {response_move.status_code}. Resposta: {response_move.text}"
+            )
 
-    # Log final de resumo impresso APÓS o término de todo o laço de repetição <---
-    print("\n" + "="*50)
-    print("🏁 RELATÓRIO FINAL DA AUTOMAÇÃO 🏁")
-    print(f"✅ Total de cartões movidos para Execução: {cartoes_movidos}")
-    print("="*50 + "\n")
+    print("\n" + "=" * 50)
+    print("RELATORIO FINAL DA AUTOMACAO")
+    print(f"Total de cartoes lidos: {len(solicitacoes)}")
+    print(f"Movidos para Execucao: {cartoes_movidos}")
+    print(f"Sem anexo Trello: {cartoes_sem_anexo_trello}")
+    print(f"Sem anexo finalizado: {cartoes_sem_anexo_finalizado}")
+    print(f"Falhas ao consultar anexos: {falhas_consulta_anexo}")
+    print(f"Falhas ao mover cartoes: {falhas_movimento}")
+    print("=" * 50 + "\n")
 
-rodar_automacao_flexivel()
+
+if __name__ == "__main__":
+    rodar_automacao_flexivel()
