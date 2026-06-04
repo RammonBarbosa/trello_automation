@@ -134,9 +134,12 @@ def montar_relatorio(
 
 
 def salvar_relatorio(conteudo: str) -> str:
-    pasta_atual = os.path.dirname(__file__)
-    nome_arquivo = "relatorio_duplicados_projetos.txt"
-    caminho_arquivo = os.path.join(pasta_atual, nome_arquivo)
+    pasta_relatorios = os.path.join(os.path.dirname(__file__), "relatorios_gerados")
+    os.makedirs(pasta_relatorios, exist_ok=True)
+
+    data_arquivo = datetime.now().strftime("%Y%m%d_%H%M%S")
+    nome_arquivo = f"relatorio_duplicados_projetos_{data_arquivo}.txt"
+    caminho_arquivo = os.path.join(pasta_relatorios, nome_arquivo)
 
     with open(caminho_arquivo, "w", encoding="utf-8") as arquivo:
         arquivo.write(conteudo)
@@ -148,15 +151,21 @@ def salvar_relatorio(conteudo: str) -> str:
 def gerar_relatorio_duplicados() -> None:
     validar_configuracao()
 
-    print("Buscando cartoes na lista de Projetos/Solicitacoes...")
+    print("Gerando relatorio de duplicados na lista de Projetos/Solicitacoes...")
     cartoes = buscar_cartoes_lista(LISTA_PROJETO_SOLICITACOES)
     duplicados = encontrar_duplicados(cartoes)
     relatorio = montar_relatorio(cartoes, duplicados)
     caminho_relatorio = salvar_relatorio(relatorio)
+    total_cartoes_duplicados = sum(len(grupo) for grupo in duplicados.values())
 
-    print(relatorio)
-    print(f"\nRelatorio salvo em: {caminho_relatorio}")
-    print("Observacao: este script apenas gera relatorio. Nenhum cartao e alterado.")
+    print(f"Relatorio salvo em: {caminho_relatorio}")
+    print(
+        "Resumo: "
+        f"{len(cartoes)} cartoes analisados, "
+        f"{len(duplicados)} nomes repetidos, "
+        f"{total_cartoes_duplicados} cartoes envolvidos."
+    )
+    print("Observacao: nenhum cartao foi alterado.")
 
 
 if __name__ == "__main__":

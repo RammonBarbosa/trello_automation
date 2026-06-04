@@ -2,6 +2,7 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 import requests
@@ -257,7 +258,7 @@ def analisar_solicitacao(cartao_pai: dict[str, Any]) -> ResultadoSolicitacao:
     )
 
 
-def imprimir_resultado(resultado: ResultadoSolicitacao) -> None:
+def formatar_resultado(resultado: ResultadoSolicitacao) -> str:
     rotulos = {
         "CONCLUIDO": "[CONCLUIDO]",
         "AGUARDANDO_OBRA": "[AGUARDANDO OBRA]",
@@ -280,13 +281,30 @@ def imprimir_resultado(resultado: ResultadoSolicitacao) -> None:
     if resultado.detalhes:
         partes.append("Detalhes: " + " | ".join(resultado.detalhes))
 
-    print(" - ".join(partes))
+    return " - ".join(partes)
+
+
+def salvar_relatorio(conteudo: str) -> str:
+    pasta_relatorios = os.path.join(os.path.dirname(__file__), "relatorios_gerados")
+    os.makedirs(pasta_relatorios, exist_ok=True)
+
+    data_arquivo = datetime.now().strftime("%Y%m%d_%H%M%S")
+    caminho_arquivo = os.path.join(
+        pasta_relatorios,
+        f"relatorio_execucao_{data_arquivo}.txt",
+    )
+
+    with open(caminho_arquivo, "w", encoding="utf-8") as arquivo:
+        arquivo.write(conteudo)
+        arquivo.write("\n")
+
+    return caminho_arquivo
 
 
 def gerar_relatorio_inteligente() -> None:
     validar_configuracao()
 
-    print("Iniciando varredura na lista de Execucao...\n")
+    print("Gerando relatorio da lista de Execucao...")
     solicitacoes_pai = buscar_cartoes_lista(LISTA_EXECUCAO)
 
     totais = {
@@ -299,33 +317,50 @@ def gerar_relatorio_inteligente() -> None:
         "ERRO": 0,
     }
 
-    print("DETALHAMENTO DOS CARTOES:")
-    print("-" * 100)
+    linhas_detalhamento = [
+        "DETALHAMENTO DOS CARTOES",
+        "-" * 100,
+    ]
 
     for cartao_pai in solicitacoes_pai:
         resultado = analisar_solicitacao(cartao_pai)
         totais[resultado.status] = totais.get(resultado.status, 0) + 1
-        imprimir_resultado(resultado)
+        linhas_detalhamento.append(formatar_resultado(resultado))
 
     total_analisados = len(solicitacoes_pai)
     total_sem_vinculo = (
         totais["SEM_PROJETO"] + totais["SEM_IMPLANTACAO"] + totais["SEM_PROJETO_VALIDO"]
     )
     total_somado = sum(totais.values())
+    data_relatorio = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
-    print("\n" + "=" * 60)
-    print("RELATORIO DE STATUS DA EXECUCAO")
-    print("=" * 60)
-    print(f"Total de solicitacoes na lista:  {total_analisados}")
-    print("-" * 60)
-    print(f"Implantacoes concluidas:         {totais['CONCLUIDO']}")
-    print(f"Aguardando obra:                 {totais['AGUARDANDO_OBRA']}")
-    print(f"Implantacoes pendentes:          {totais['PENDENTE']}")
-    print(f"Cartoes sem vinculo completo:    {total_sem_vinculo}")
-    print(f"Erros de leitura da API:         {totais['ERRO']}")
-    print("-" * 60)
-    print(f"Validacao matematica: Soma = {total_somado} (deve ser igual a {total_analisados})")
-    print("=" * 60 + "\n")
+    linhas_resumo = [
+        "=" * 60,
+        "RELATORIO DE STATUS DA EXECUCAO",
+        "=" * 60,
+        f"Gerado em: {data_relatorio}",
+        f"Total de solicitacoes na lista:  {total_analisados}",
+        "-" * 60,
+        f"Implantacoes concluidas:         {totais['CONCLUIDO']}",
+        f"Aguardando obra:                 {totais['AGUARDANDO_OBRA']}",
+        f"Implantacoes pendentes:          {totais['PENDENTE']}",
+        f"Cartoes sem vinculo completo:    {total_sem_vinculo}",
+        f"Erros de leitura da API:         {totais['ERRO']}",
+        "-" * 60,
+        f"Validacao matematica: Soma = {total_somado} (deve ser igual a {total_analisados})",
+        "=" * 60,
+    ]
+
+    relatorio = "\n".join([*linhas_resumo, "", *linhas_detalhamento])
+    caminho_relatorio = salvar_relatorio(relatorio)
+
+    print(f"Relatorio salvo em: {caminho_relatorio}")
+    print(
+        "Resumo: "
+        f"{total_analisados} solicitacoes analisadas, "
+        f"{totais['CONCLUIDO']} concluidas, "
+        f"{totais['PENDENTE']} pendentes."
+    )
 
 
 if __name__ == "__main__":

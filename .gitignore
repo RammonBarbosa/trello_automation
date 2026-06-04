@@ -3,4 +3,8 @@
 
 # Ignorar pastas de ambiente virtual do Python
 venv/
+.venv/
 __pycache__/
+
+# Ignorar relatorios gerados em execucoes locais
+relatorios_gerados/

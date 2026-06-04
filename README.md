@@ -1,26 +1,27 @@
 # Automacao de Fluxo Kanban no Trello
 
-Projeto em Python criado para automatizar a movimentacao de cartoes entre listas do Trello, reduzindo verificacoes manuais em um fluxo operacional baseado em Kanban.
+Projeto em Python criado para automatizar e auditar um fluxo operacional no Trello, reduzindo verificacoes manuais entre listas de solicitacoes, projetos, execucao e implantacao.
 
-A automacao monitora cartoes de solicitacoes, identifica cartoes de projetos anexados e move automaticamente a solicitacao principal para a etapa de execucao quando pelo menos um projeto relacionado e concluido.
+A automacao monitora cartoes de solicitacoes, identifica cartoes vinculados por anexos e move automaticamente a solicitacao principal para a lista de execucao quando pelo menos um projeto relacionado e concluido. O projeto tambem possui relatorios auxiliares para acompanhar pendencias, implantacoes e duplicidades.
 
 ## Problema Resolvido
 
 Em fluxos com multiplos quadros, setores e etapas, acompanhar manualmente o status de cartoes relacionados pode gerar atrasos, retrabalho e falhas de comunicacao.
 
-Este projeto resolve esse gargalo ao integrar listas do Trello via API, criando uma regra automatizada para avancar solicitacoes assim que uma condicao de negocio e atendida.
+Este projeto resolve esse gargalo ao integrar listas do Trello via API, criando regras automatizadas e relatorios de apoio para tomada de decisao.
 
 ## Principais Funcionalidades
 
-- Consulta automatica de cartoes em listas especificas do Trello.
-- Leitura de anexos para identificar cartoes vinculados.
+- Movimentacao automatica de solicitacoes para a lista de execucao.
+- Verificacao de cartoes anexados como projetos relacionados.
+- Relatorio de solicitacoes prontas para execucao.
+- Relatorio de status dos cartoes na lista de execucao.
+- Relatorio de possiveis cartoes duplicados na lista de projetos.
 - Extracao de shortlinks de URLs do Trello com expressao regular.
-- Verificacao do status de cartoes relacionados em outro quadro/lista.
-- Movimentacao automatica do cartao principal para a lista de execucao.
 - Tratamento de falhas de conexao e novas tentativas em requisicoes HTTP.
 - Controle de cadencia entre chamadas para reduzir risco de rate limiting.
-- Relatorios no terminal com totais de cartoes lidos, movidos e pendencias encontradas.
-- Scripts auxiliares para analise de solicitacoes, projetos e duplicidades.
+- Geracao de relatorios em arquivos `.txt`.
+- Saida enxuta no terminal, mostrando apenas resumo e caminho do relatorio.
 
 ## Tecnologias Utilizadas
 
@@ -33,10 +34,12 @@ Este projeto resolve esse gargalo ao integrar listas do Trello via API, criando 
 
 ```text
 .
-|-- automacao_trello.py
-|-- readexc.py
+|-- main.py
+|-- moveproj.py
 |-- readproj.py
-|-- relatorio_duplicados_projetos.py
+|-- readexc.py
+|-- duplicates.py
+|-- requirements.txt
 `-- README.md
 ```
 
@@ -44,19 +47,20 @@ Este projeto resolve esse gargalo ao integrar listas do Trello via API, criando 
 
 | Arquivo | Finalidade |
 | --- | --- |
-| `automacao_trello.py` | Script principal da automacao. Verifica cartoes anexados e move solicitacoes para execucao quando a regra e atendida. |
-| `readproj.py` | Analisa solicitacoes e seus projetos anexados, gerando uma visao de status para acompanhamento. |
-| `readexc.py` | Analisa cartoes em execucao e valida vinculos com projetos/implantacao. |
-| `duplicates.py` | Identifica possiveis cartoes duplicados na lista de projetos/solicitacoes. |
+| `main.py` | Menu principal para executar relatorios e automacao em um unico ponto de entrada. |
+| `moveproj.py` | Automacao principal. Move solicitacoes para execucao quando algum projeto anexado esta finalizado. |
+| `readproj.py` | Gera relatorio de solicitacoes/projetos prontos para execucao. |
+| `readexc.py` | Gera relatorio de status dos cartoes que ja estao na lista de execucao. |
+| `duplicates.py` | Gera relatorio de possiveis cartoes duplicados na lista de projetos/solicitacoes. |
 
 ## Como Funciona
 
-1. O script consulta os cartoes de uma lista de solicitacoes no Trello.
-2. Para cada cartao, busca anexos que sejam links de cartoes Trello.
+1. O script consulta cartoes em listas especificas do Trello.
+2. Para cada cartao, busca anexos que sejam links de outros cartoes Trello.
 3. O shortlink do cartao anexado e extraido da URL.
-4. A API do Trello e consultada para verificar em qual lista o cartao anexado esta.
-5. Se algum cartao anexado estiver na lista de projetos finalizados, a solicitacao principal e movida para a lista de execucao.
-6. Ao final, o terminal exibe um relatorio com os resultados da execucao.
+4. A API do Trello e consultada para verificar status, lista, etiquetas e conclusoes.
+5. A automacao move cartoes quando a regra de negocio e atendida.
+6. Os relatorios sao salvos em arquivos `.txt` dentro de `relatorios_gerados`.
 
 ## Configuracao
 
@@ -99,46 +103,54 @@ source .venv/bin/activate
 Instale as dependencias:
 
 ```bash
-pip install requests python-dotenv
+pip install -r requirements.txt
 ```
 
 ## Execucao
 
-Para executar a automacao principal:
+Para abrir o menu principal:
 
 ```bash
-python automacao_trello.py
+python main.py
 ```
 
-Para executar os scripts auxiliares:
+Tambem e possivel executar cada rotina individualmente:
 
 ```bash
 python readproj.py
 python readexc.py
 python duplicates.py
+python moveproj.py
 ```
 
-## Exemplo de Saida
+## Relatorios Gerados
+
+Os relatorios sao salvos automaticamente na pasta:
 
 ```text
-RELATORIO FINAL DA AUTOMACAO
-Total de cartoes lidos: 42
-Movidos para Execucao: 7
-Sem anexo Trello: 3
-Sem anexo finalizado: 32
-Falhas ao consultar anexos: 0
-Falhas ao mover cartoes: 0
+relatorios_gerados/
 ```
+
+Exemplos de arquivos:
+
+```text
+relatorio_projetos_prontos_20260604_133000.txt
+relatorio_execucao_20260604_133000.txt
+relatorio_duplicados_projetos_20260604_133000.txt
+relatorio_automacao_movimentacao_20260604_133000.txt
+```
+
+No terminal, a execucao mostra apenas um resumo curto e o caminho do arquivo gerado.
 
 ## Decisoes Tecnicas
 
 - Uso de variaveis de ambiente para evitar exposicao de credenciais.
-- Separacao entre automacao principal e scripts de apoio para analise operacional.
+- Separacao entre automacao de movimentacao e relatorios operacionais.
 - Requisicoes com timeout para evitar travamentos indefinidos.
 - Mecanismo de retry para lidar com falhas temporarias de conexao.
 - Respeito ao rate limit da API por meio de pausas entre requisicoes.
-- Validacao previa das credenciais antes de iniciar o processo.
-- Relatorios simples no terminal para facilitar auditoria e acompanhamento.
+- Relatorios persistidos em `.txt` para auditoria e consulta posterior.
+- Menu central em `main.py` para facilitar o uso do projeto.
 
 ## Competencias Demonstradas
 
@@ -154,12 +166,12 @@ Este projeto demonstra habilidades relevantes para automacao de processos e inte
 
 ## Possiveis Melhorias Futuras
 
-- Criar um arquivo `requirements.txt` para padronizar a instalacao.
+- Modularizar o codigo em pacotes como `config`, `trello_client`, `automacoes` e `relatorios`.
 - Parametrizar os IDs das listas do Trello via `.env`.
-- Adicionar logs estruturados em arquivo.
+- Adicionar logs estruturados.
 - Criar testes automatizados para funcoes de extracao e validacao.
 - Agendar a execucao recorrente com Task Scheduler, cron ou servico em nuvem.
-- Criar dashboard simples para acompanhar execucoes e cartoes movimentados.
+- Criar um dashboard para visualizar os relatorios gerados.
 
 ## Observacao de Seguranca
 
@@ -167,4 +179,4 @@ Nao publique o arquivo `.env` no repositorio. Ele contem credenciais sensiveis d
 
 ## Autor
 
-Projeto em desenvolvimento como solucao pratica de automacao para otimizar um fluxo real de solicitacoes, projetos e execucao dentro do Trello. O proximo passo é sair do log e ir para um site, para uma visualização melhor dos relatorios gerados.
+Projeto em desenvolvimento como solucao pratica de automacao para otimizar um fluxo real de solicitacoes, projetos e execucao dentro do Trello.
