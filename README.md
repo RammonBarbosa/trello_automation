@@ -47,7 +47,7 @@ Este projeto resolve esse gargalo ao integrar listas do Trello via API, criando 
 | `automacao_trello.py` | Script principal da automacao. Verifica cartoes anexados e move solicitacoes para execucao quando a regra e atendida. |
 | `readproj.py` | Analisa solicitacoes e seus projetos anexados, gerando uma visao de status para acompanhamento. |
 | `readexc.py` | Analisa cartoes em execucao e valida vinculos com projetos/implantacao. |
-| `relatorio_duplicados_projetos.py` | Identifica possiveis cartoes duplicados na lista de projetos/solicitacoes. |
+| `duplicates.py` | Identifica possiveis cartoes duplicados na lista de projetos/solicitacoes. |
 
 ## Como Funciona
 
@@ -115,7 +115,7 @@ Para executar os scripts auxiliares:
 ```bash
 python readproj.py
 python readexc.py
-python relatorio_duplicados_projetos.py
+python duplicates.py
 ```
 
 ## Exemplo de Saida
@@ -167,4 +167,4 @@ Nao publique o arquivo `.env` no repositorio. Ele contem credenciais sensiveis d
 
 ## Autor
 
-Projeto desenvolvido como solucao pratica de automacao para otimizar um fluxo real de solicitacoes, projetos e execucao dentro do Trello.
+Projeto em desenvolvimento como solucao pratica de automacao para otimizar um fluxo real de solicitacoes, projetos e execucao dentro do Trello. O proximo passo é sair do log e ir para um site, para uma visualização melhor dos relatorios gerados.
