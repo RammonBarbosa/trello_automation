@@ -1,141 +1,332 @@
-import requests
-import time
 import os
+import re
+import time
+from dataclasses import dataclass, field
+from typing import Any
+
+import requests
 from dotenv import load_dotenv
 
-caminho_env = os.path.join(os.path.dirname(__file__), '.env')
+
+caminho_env = os.path.join(os.path.dirname(__file__), ".env")
 load_dotenv(caminho_env)
 
-API_KEY = os.getenv('API_KEY')
-TOKEN = os.getenv('TOKEN')
+API_KEY = os.getenv("API_KEY")
+TOKEN = os.getenv("TOKEN")
 
-# --- CONFIGURAÇÃO DE LISTAS E QUADROS ---
-LISTA_EXECUCAO = '6669a6666762039572b85c2d' # Quadro de Solicitações
-LISTA_OBRA_PROJETOS = '66a3cd53fa0cf67309404be0' # Lista "Obra" no Quadro de Projetos
+# --- CONFIGURACAO DE LISTAS ---
+LISTA_EXECUCAO = "6669a6666762039572b85c2d"  # Lista "Execucao" no quadro Solicitacoes 3.0
+LISTA_OBRA_PROJETOS = "66a3cd53fa0cf67309404be0"  # Lista "Obra" no quadro Projetos
+LISTA_FINALIZADOS_PROJETOS = "66a3cd4cf460377406141493"  # Lista "Finalizados" no quadro Projetos
 
-def gerar_relatorio_inteligente():
-    print("🔍 Iniciando varredura na Lista de Execução...\n")
-    url_cards = f"https://api.trello.com/1/lists/{LISTA_EXECUCAO}/cards"
-    params = {'key': API_KEY, 'token': TOKEN, 'attachments': 'true'}
-    
-    response = requests.get(url_cards, params=params)
+TRELLO_API = "https://api.trello.com/1"
+TIMEOUT = 20
+MAX_TENTATIVAS = 3
+INTERVALO_ENTRE_REQUISICOES = 0.2
+
+
+@dataclass
+class ResultadoSolicitacao:
+    nome: str
+    status: str
+    motivo: str
+    projeto: str | None = None
+    implantacao: str | None = None
+    detalhes: list[str] = field(default_factory=list)
+
+
+def validar_configuracao() -> None:
+    if not API_KEY or not TOKEN:
+        raise RuntimeError("API_KEY ou TOKEN nao foram carregados. Confira o arquivo .env.")
+
+
+def extrair_shortlink_trello(url: str | None) -> str | None:
+    if not url:
+        return None
+
+    match = re.search(r"trello\.com/c/([^/?#]+)", url, flags=re.IGNORECASE)
+    if not match:
+        return None
+
+    return match.group(1)
+
+
+def requisicao_trello(metodo: str, caminho: str, **params: Any) -> requests.Response:
+    url = f"{TRELLO_API}{caminho}"
+    params = {"key": API_KEY, "token": TOKEN, **params}
+
+    for tentativa in range(1, MAX_TENTATIVAS + 1):
+        try:
+            response = requests.request(metodo, url, params=params, timeout=TIMEOUT)
+        except requests.RequestException as erro:
+            if tentativa == MAX_TENTATIVAS:
+                raise RuntimeError(f"Falha de conexao com o Trello: {erro}") from erro
+
+            print(f"Falha de conexao. Tentando novamente ({tentativa}/{MAX_TENTATIVAS})...")
+            time.sleep(2 * tentativa)
+            continue
+
+        if response.status_code != 429:
+            time.sleep(INTERVALO_ENTRE_REQUISICOES)
+            return response
+
+        espera = int(response.headers.get("Retry-After", "10"))
+        print(f"Rate limit do Trello. Aguardando {espera}s antes de tentar novamente...")
+        time.sleep(espera)
+
+    return response
+
+
+def buscar_cartoes_lista(id_lista: str) -> list[dict[str, Any]]:
+    response = requisicao_trello(
+        "GET",
+        f"/lists/{id_lista}/cards",
+        attachments="true",
+        fields="id,name,idList,shortLink,url",
+    )
+
     if response.status_code != 200:
-        print("❌ Erro ao acessar a lista de Execução.")
-        return
+        raise RuntimeError(
+            "Erro ao acessar a lista no Trello. "
+            f"Lista: {id_lista}. Status: {response.status_code}. Resposta: {response.text}"
+        )
 
-    solicitacoes_pai = response.json()
-    
-    # --- VARIÁVEIS DO RELATÓRIO ---
-    total_analisados = len(solicitacoes_pai)
-    implantacoes_concluidas = 0
-    implantacoes_pendentes = 0
-    aguardando_obra = 0
-    sem_filho_ou_neto = 0
-    erros_de_leitura = 0
+    return response.json()
 
-    print("📋 DETALHAMENTO DOS CARTÕES:")
-    print("-" * 80)
+
+def buscar_cartao(
+    shortlink_ou_id: str,
+    incluir_anexos: bool = False,
+) -> tuple[dict[str, Any] | None, requests.Response]:
+    response = requisicao_trello(
+        "GET",
+        f"/cards/{shortlink_ou_id}",
+        attachments=str(incluir_anexos).lower(),
+        fields="id,name,idList,idBoard,closed,dueComplete,labels,shortLink,url",
+    )
+
+    if response.status_code != 200:
+        return None, response
+
+    return response.json(), response
+
+
+def shortlinks_dos_anexos(cartao: dict[str, Any]) -> list[str]:
+    shortlinks: list[str] = []
+    vistos = set()
+
+    for anexo in cartao.get("attachments", []):
+        shortlink = extrair_shortlink_trello(anexo.get("url"))
+        if shortlink and shortlink not in vistos:
+            shortlinks.append(shortlink)
+            vistos.add(shortlink)
+
+    return shortlinks
+
+
+def tem_etiqueta_vistoriado(cartao: dict[str, Any]) -> bool:
+    for etiqueta in cartao.get("labels", []):
+        nome = etiqueta.get("name", "").strip().lower()
+        if nome == "vistoriado":
+            return True
+
+    return False
+
+
+def implantacao_concluida(cartao_implantacao: dict[str, Any]) -> tuple[bool, str]:
+    if cartao_implantacao.get("dueComplete") is True:
+        return True, "data marcada como concluida"
+
+    if tem_etiqueta_vistoriado(cartao_implantacao):
+        return True, "etiqueta Vistoriado"
+
+    return False, "sem data concluida e sem etiqueta Vistoriado"
+
+
+def analisar_solicitacao(cartao_pai: dict[str, Any]) -> ResultadoSolicitacao:
+    nome_pai = cartao_pai.get("name", "Sem nome")
+    shortlinks_projetos = shortlinks_dos_anexos(cartao_pai)
+
+    if not shortlinks_projetos:
+        return ResultadoSolicitacao(
+            nome=nome_pai,
+            status="SEM_PROJETO",
+            motivo="cartao da Execucao sem anexo Trello de projeto",
+        )
+
+    erros: list[str] = []
+    pendencias: list[ResultadoSolicitacao] = []
+    aguardando_obra: ResultadoSolicitacao | None = None
+    projetos_fora_do_fluxo: list[str] = []
+
+    for shortlink_projeto in shortlinks_projetos:
+        projeto, response_projeto = buscar_cartao(shortlink_projeto, incluir_anexos=True)
+
+        if projeto is None:
+            erros.append(
+                f"erro {response_projeto.status_code} ao ler projeto {shortlink_projeto}: "
+                f"{response_projeto.text}"
+            )
+            continue
+
+        nome_projeto = projeto.get("name", "Projeto sem nome")
+
+        if projeto.get("idList") == LISTA_OBRA_PROJETOS:
+            aguardando_obra = ResultadoSolicitacao(
+                nome=nome_pai,
+                status="AGUARDANDO_OBRA",
+                motivo="projeto esta na lista Obra",
+                projeto=nome_projeto,
+            )
+            continue
+
+        if projeto.get("idList") != LISTA_FINALIZADOS_PROJETOS:
+            projetos_fora_do_fluxo.append(
+                f"{nome_projeto} esta na lista {projeto.get('idList')}"
+            )
+
+        shortlinks_implantacoes = shortlinks_dos_anexos(projeto)
+
+        if not shortlinks_implantacoes:
+            pendencias.append(
+                ResultadoSolicitacao(
+                    nome=nome_pai,
+                    status="SEM_IMPLANTACAO",
+                    motivo="projeto sem anexo Trello de implantacao",
+                    projeto=nome_projeto,
+                )
+            )
+            continue
+
+        for shortlink_implantacao in shortlinks_implantacoes:
+            implantacao, response_implantacao = buscar_cartao(shortlink_implantacao)
+
+            if implantacao is None:
+                erros.append(
+                    f"erro {response_implantacao.status_code} ao ler implantacao "
+                    f"{shortlink_implantacao}: {response_implantacao.text}"
+                )
+                continue
+
+            concluida, motivo = implantacao_concluida(implantacao)
+            nome_implantacao = implantacao.get("name", "Implantacao sem nome")
+
+            if concluida:
+                return ResultadoSolicitacao(
+                    nome=nome_pai,
+                    status="CONCLUIDO",
+                    motivo=motivo,
+                    projeto=nome_projeto,
+                    implantacao=nome_implantacao,
+                    detalhes=list(projetos_fora_do_fluxo),
+                )
+
+            pendencias.append(
+                ResultadoSolicitacao(
+                    nome=nome_pai,
+                    status="PENDENTE",
+                    motivo=motivo,
+                    projeto=nome_projeto,
+                    implantacao=nome_implantacao,
+                    detalhes=list(projetos_fora_do_fluxo),
+                )
+            )
+
+    if aguardando_obra:
+        aguardando_obra.detalhes = list(projetos_fora_do_fluxo)
+        return aguardando_obra
+
+    if pendencias:
+        pendente = pendencias[0]
+        pendente.detalhes = list(dict.fromkeys([*pendente.detalhes, *projetos_fora_do_fluxo]))
+        return pendente
+
+    if erros:
+        return ResultadoSolicitacao(
+            nome=nome_pai,
+            status="ERRO",
+            motivo="; ".join(erros),
+            detalhes=projetos_fora_do_fluxo,
+        )
+
+    return ResultadoSolicitacao(
+        nome=nome_pai,
+        status="SEM_PROJETO_VALIDO",
+        motivo="anexos Trello encontrados, mas nenhum projeto pode ser analisado",
+        detalhes=projetos_fora_do_fluxo,
+    )
+
+
+def imprimir_resultado(resultado: ResultadoSolicitacao) -> None:
+    rotulos = {
+        "CONCLUIDO": "[CONCLUIDO]",
+        "AGUARDANDO_OBRA": "[AGUARDANDO OBRA]",
+        "PENDENTE": "[PENDENTE]",
+        "SEM_PROJETO": "[SEM PROJETO ANEXADO]",
+        "SEM_IMPLANTACAO": "[SEM IMPLANTACAO]",
+        "SEM_PROJETO_VALIDO": "[SEM PROJETO VALIDO]",
+        "ERRO": "[ERRO DE LEITURA]",
+    }
+
+    partes = [f"{rotulos.get(resultado.status, '[STATUS DESCONHECIDO]'):24} {resultado.nome}"]
+
+    if resultado.projeto:
+        partes.append(f"Projeto: {resultado.projeto}")
+    if resultado.implantacao:
+        partes.append(f"Implantacao: {resultado.implantacao}")
+
+    partes.append(f"Motivo: {resultado.motivo}")
+
+    if resultado.detalhes:
+        partes.append("Detalhes: " + " | ".join(resultado.detalhes))
+
+    print(" - ".join(partes))
+
+
+def gerar_relatorio_inteligente() -> None:
+    validar_configuracao()
+
+    print("Iniciando varredura na lista de Execucao...\n")
+    solicitacoes_pai = buscar_cartoes_lista(LISTA_EXECUCAO)
+
+    totais = {
+        "CONCLUIDO": 0,
+        "AGUARDANDO_OBRA": 0,
+        "PENDENTE": 0,
+        "SEM_PROJETO": 0,
+        "SEM_IMPLANTACAO": 0,
+        "SEM_PROJETO_VALIDO": 0,
+        "ERRO": 0,
+    }
+
+    print("DETALHAMENTO DOS CARTOES:")
+    print("-" * 100)
 
     for cartao_pai in solicitacoes_pai:
-        nome_pai = cartao_pai['name']
-        
-        # FILTRO BLINDADO: Garante que o link possui a estrutura de cartão '/c/'
-        anexos_pai = [a for a in cartao_pai.get('attachments', []) if 'trello.com/c/' in a['url']]
-        
-        if not anexos_pai:
-            sem_filho_ou_neto += 1
-            print(f"⚠️  [SEM PROJETO ANEXADO]  {nome_pai}")
-            continue
+        resultado = analisar_solicitacao(cartao_pai)
+        totais[resultado.status] = totais.get(resultado.status, 0) + 1
+        imprimir_resultado(resultado)
 
-        # Pega a parte da URL correspondente ao shortLink do cartão de forma segura
-        url_partes = anexos_pai[0]['url'].split('/c/')
-        if len(url_partes) < 2:
-            erros_de_leitura += 1
-            print(f"🚫 [LINK INVÁLIDO NO PAI]  {nome_pai}")
-            continue
-            
-        short_id_filho = url_partes[1].split('/')[0]
-        
-        # BUSCA O FILHO (Projeto)
-        res_filho = requests.get(
-            f"https://api.trello.com/1/cards/{short_id_filho}",
-            params={'key': API_KEY, 'token': TOKEN, 'attachments': 'true'}
-        )
-        time.sleep(0.2) 
-        
-        if res_filho.status_code == 200:
-            dados_filho = res_filho.json()
-            
-            # 🏗️ REGRA 1: Se o Filho estiver na lista "Obra", não precisa nem buscar o Neto!
-            if dados_filho.get('idList') == LISTA_OBRA_PROJETOS:
-                aguardando_obra += 1
-                print(f"🏗️  [AGUARDANDO OBRA]      {nome_pai}")
-                continue
-            
-            anexos_filho = [a for a in dados_filho.get('attachments', []) if 'trello.com/c/' in a['url']]
-            
-            if not anexos_filho:
-                sem_filho_ou_neto += 1
-                print(f"⚠️  [SEM IMPLANTAÇÃO]      {nome_pai}")
-                continue
-                
-            url_partes_filho = anexos_filho[0]['url'].split('/c/')
-            if len(url_partes_filho) < 2:
-                erros_de_leitura += 1
-                print(f"🚫 [LINK INVÁLIDO NO FILHO] {nome_pai}")
-                continue
-                
-            short_id_neto = url_partes_filho[1].split('/')[0]
-            
-            # BUSCA O NETO (Implantação)
-            res_neto = requests.get(
-                f"https://api.trello.com/1/cards/{short_id_neto}",
-                params={'key': API_KEY, 'token': TOKEN}
-            )
-            time.sleep(0.2) 
-            
-            if res_neto.status_code == 200:
-                dados_neto = res_neto.json()
-                
-                # Coleta as etiquetas convertendo para minúsculo
-                etiquetas_neto = [l['name'].lower() for l in dados_neto.get('labels', [])]
-                
-                # 🔍 REGRA 2: Verifica em minúsculo se a etiqueta existe
-                tem_etiqueta_vistoriado = "vistoriado" in etiquetas_neto
-                data_concluida = dados_neto.get('dueComplete') == True
-                
-                if data_concluida or tem_etiqueta_vistoriado:
-                    implantacoes_concluidas += 1
-                    status_motivo = "Vistoriado" if tem_etiqueta_vistoriado else "Data OK"
-                    print(f"✅ [CONCLUÍDO - {status_motivo}]   {nome_pai}")
-                else:
-                    implantacoes_pendentes += 1
-                    print(f"⏳ [PENDENTE]             {nome_pai}")
-            
-            else:
-                erros_de_leitura += 1
-                print(f"🚫 [ERRO {res_neto.status_code} NO NETO]      {nome_pai}")
-                
-        else:
-            erros_de_leitura += 1
-            print(f"🚫 [ERRO {res_filho.status_code} NO FILHO]     {nome_pai}")
+    total_analisados = len(solicitacoes_pai)
+    total_sem_vinculo = (
+        totais["SEM_PROJETO"] + totais["SEM_IMPLANTACAO"] + totais["SEM_PROJETO_VALIDO"]
+    )
+    total_somado = sum(totais.values())
 
-    # --- EXIBIÇÃO DO RELATÓRIO FINAL ---
-    print("\n" + "="*50)
-    print("📊 RELATÓRIO DE STATUS DA EXECUÇÃO 📊")
-    print("="*50)
-    print(f"Total de Solicitações na lista:  {total_analisados}")
-    print("-" * 50)
-    print(f"✅ Implantações CONCLUÍDAS:       {implantacoes_concluidas}")
-    print(f"🏗️  Aguardando OBRA:               {aguardando_obra}")
-    print(f"⏳ Implantações PENDENTES:        {implantacoes_pendentes}")
-    print(f"⚠️  Cartões sem anexo:             {sem_filho_ou_neto}")
-    print(f"🚫 Erros de leitura da API:       {erros_de_leitura}")
-    print("="*50)
-    
-    total_somado = implantacoes_concluidas + aguardando_obra + implantacoes_pendentes + sem_filho_ou_neto + erros_de_leitura
-    print(f"🔎 Validação Matemática: Soma = {total_somado} (Deve ser igual a {total_analisados})")
-    print("="*50 + "\n")
+    print("\n" + "=" * 60)
+    print("RELATORIO DE STATUS DA EXECUCAO")
+    print("=" * 60)
+    print(f"Total de solicitacoes na lista:  {total_analisados}")
+    print("-" * 60)
+    print(f"Implantacoes concluidas:         {totais['CONCLUIDO']}")
+    print(f"Aguardando obra:                 {totais['AGUARDANDO_OBRA']}")
+    print(f"Implantacoes pendentes:          {totais['PENDENTE']}")
+    print(f"Cartoes sem vinculo completo:    {total_sem_vinculo}")
+    print(f"Erros de leitura da API:         {totais['ERRO']}")
+    print("-" * 60)
+    print(f"Validacao matematica: Soma = {total_somado} (deve ser igual a {total_analisados})")
+    print("=" * 60 + "\n")
+
 
 if __name__ == "__main__":
     gerar_relatorio_inteligente()
