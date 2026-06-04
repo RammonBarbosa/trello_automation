@@ -2,6 +2,7 @@ from duplicates import gerar_relatorio_duplicados
 from moveproj import rodar_automacao_flexivel
 from readexc import gerar_relatorio_inteligente
 from readproj import gerar_relatorio_projetos
+from web_main import iniciar_dashboard
 
 
 def main() -> None:
@@ -10,6 +11,7 @@ def main() -> None:
         "2": ("Relatorio da lista de execucao", gerar_relatorio_inteligente),
         "3": ("Relatorio de duplicados", gerar_relatorio_duplicados),
         "4": ("Mover cartoes para execucao", rodar_automacao_flexivel),
+        "5": ("Abrir dashboard web", iniciar_dashboard),
     }
 
     print("Automacao Trello")
